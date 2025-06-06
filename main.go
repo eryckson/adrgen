@@ -208,7 +208,34 @@ func promptForStatus() (string, error) {
 	return result, err
 }
 
-func promptForTitle() (string, error) {
+func getCurrentTitle(content string) string {
+	lines := strings.Split(content, "\n")
+	for _, line := range lines {
+		if strings.HasPrefix(line, "# ADR") {
+			parts := strings.SplitN(line, ": ", 2)
+			if len(parts) == 2 {
+				return parts[1]
+			}
+		}
+	}
+	return ""
+}
+
+func updateTitle(content, newTitle string) string {
+	lines := strings.Split(content, "\n")
+	for i, line := range lines {
+		if strings.HasPrefix(line, "# ADR") {
+			parts := strings.SplitN(line, ": ", 2)
+			if len(parts) == 2 {
+				lines[i] = fmt.Sprintf("%s: %s", parts[0], newTitle)
+				break
+			}
+		}
+	}
+	return strings.Join(lines, "\n")
+}
+
+func promptForTitle(defaultTitle string) (string, error) {
 	validate := func(input string) error {
 		if len(input) == 0 {
 			return fmt.Errorf("title cannot be empty")
@@ -217,8 +244,10 @@ func promptForTitle() (string, error) {
 	}
 
 	prompt := promptui.Prompt{
-		Label:    "ADR Title",
-		Validate: validate,
+		Label:     "ADR Title",
+		Validate:  validate,
+		Default:   defaultTitle,
+		AllowEdit: true,
 	}
 
 	return prompt.Run()
@@ -314,24 +343,21 @@ func main() {
 		return
 	}
 
-	var title string
-	isNewAdr := !adrExists(number)
-	if isNewAdr {
-		title, err = promptForTitle()
-		if err != nil {
-			fmt.Printf("Prompt failed %v\n", err)
-			return
-		}
-	}
-
 	err = ensureDir(adrDir)
 	if err != nil {
 		fmt.Println("Error creating directory:", err)
 		return
 	}
 
-	var filename string
+	var oldFilename, filename, title string
+	isNewAdr := !adrExists(number)
+
 	if isNewAdr {
+		title, err = promptForTitle("")
+		if err != nil {
+			fmt.Printf("Prompt failed %v\n", err)
+			return
+		}
 		kebabTitle := toKebabCase(title)
 		filename = fmt.Sprintf("adr-%s-%s.md", number, kebabTitle)
 	} else {
@@ -344,9 +370,31 @@ func main() {
 		prefix := fmt.Sprintf("adr-%s-", number)
 		for _, file := range files {
 			if strings.HasPrefix(file.Name(), prefix) {
-				filename = file.Name()
+				oldFilename = file.Name()
 				break
 			}
+		}
+
+		// Read existing content to get current title
+		existingContent, err := os.ReadFile(filepath.Join(adrDir, oldFilename))
+		if err != nil {
+			fmt.Println("Error reading existing ADR:", err)
+			return
+		}
+
+		currentTitle := getCurrentTitle(string(existingContent))
+		title, err = promptForTitle(currentTitle)
+		if err != nil {
+			fmt.Printf("Prompt failed %v\n", err)
+			return
+		}
+
+		// Only update filename if title changed
+		if title != currentTitle {
+			kebabTitle := toKebabCase(title)
+			filename = fmt.Sprintf("adr-%s-%s.md", number, kebabTitle)
+		} else {
+			filename = oldFilename
 		}
 	}
 
@@ -359,12 +407,21 @@ func main() {
 		content = renderTemplate(template, number, status, title, date)
 	} else {
 		// Read existing file
-		existingContent, err := os.ReadFile(fullPath)
+		existingContent, err := os.ReadFile(filepath.Join(adrDir, oldFilename))
 		if err != nil {
 			fmt.Println("Error reading existing ADR:", err)
 			return
 		}
 		content = updateStatus(string(existingContent), status)
+		content = updateTitle(content, title)
+
+		// If filename changed, remove old file
+		if filename != oldFilename {
+			err = os.Remove(filepath.Join(adrDir, oldFilename))
+			if err != nil {
+				fmt.Printf("Warning: Could not remove old file: %v\n", err)
+			}
+		}
 	}
 
 	err = writeFile(fullPath, content)
@@ -382,6 +439,10 @@ func main() {
 	if isNewAdr {
 		fmt.Printf("✅ New ADR created successfully: %s\n", fullPath)
 	} else {
-		fmt.Printf("✅ ADR updated successfully: %s\n", fullPath)
+		if filename != oldFilename {
+			fmt.Printf("✅ ADR updated successfully (renamed from %s to %s)\n", oldFilename, filename)
+		} else {
+			fmt.Printf("✅ ADR updated successfully: %s\n", fullPath)
+		}
 	}
 }
