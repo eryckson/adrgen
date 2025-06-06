@@ -278,8 +278,8 @@ func updateStatus(content, newStatus string) string {
 		if strings.HasPrefix(line, "**Status**: ") {
 			if !statusFound {
 				// Add new status line and previous status line only once
-				newLines = append(newLines, fmt.Sprintf("**Status**: %s", newStatus))
-				newLines = append(newLines, fmt.Sprintf("**Previous Status**: %s", currentStatus))
+				newLines = append(newLines, fmt.Sprintf("**Status**: %s  ", newStatus))
+				newLines = append(newLines, fmt.Sprintf("**Previous Status**: %s  ", currentStatus))
 				statusFound = true
 			}
 			continue
