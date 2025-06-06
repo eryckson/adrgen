@@ -192,6 +192,142 @@ func TestAdrExists(t *testing.T) {
 	}
 }
 
+func TestUpdateIndexError(t *testing.T) {
+	// Create temporary directory
+	tempDir := t.TempDir()
+	originalAdrDir := adrDir
+	adrDir = tempDir
+	defer func() { adrDir = originalAdrDir }()
+
+	// Make the directory read-only to cause permission error
+	err := os.Chmod(tempDir, 0444)
+	if err != nil {
+		t.Fatalf("Failed to change directory permissions: %v", err)
+	}
+
+	// Try to update index in read-only directory
+	err = updateIndex()
+	if err == nil {
+		t.Error("Expected error when writing to read-only directory")
+	}
+}
+
+func TestWriteFileError(t *testing.T) {
+	// Create temporary directory
+	tempDir := t.TempDir()
+	testFile := filepath.Join(tempDir, "test.txt")
+
+	// Create file and make it read-only
+	err := os.WriteFile(testFile, []byte("test"), 0644)
+	if err != nil {
+		t.Fatalf("Failed to create test file: %v", err)
+	}
+	err = os.Chmod(testFile, 0444)
+	if err != nil {
+		t.Fatalf("Failed to change file permissions: %v", err)
+	}
+
+	// Try to write to read-only file
+	err = writeFile(testFile, "new content")
+	if err == nil {
+		t.Error("Expected error when writing to read-only file")
+	}
+}
+
+func TestMainWithDirectoryError(t *testing.T) {
+	// Save original args and restore them after the test
+	oldArgs := os.Args
+	defer func() { os.Args = oldArgs }()
+
+	// Create temporary directory
+	tempDir := t.TempDir()
+	originalAdrDir := adrDir
+	adrDir = filepath.Join(tempDir, "nonexistent")
+	defer func() { adrDir = originalAdrDir }()
+
+	// Make parent directory read-only to prevent creation of new directory
+	err := os.Chmod(tempDir, 0444)
+	if err != nil {
+		t.Fatalf("Failed to change directory permissions: %v", err)
+	}
+
+	// Set up command line arguments
+	os.Args = []string{"cmd", "--number", "001", "--status", "Accepted", "--title", "Test Decision"}
+
+	// Save original stdout
+	oldStdout := os.Stdout
+	r, w, _ := os.Pipe()
+	os.Stdout = w
+	defer func() { os.Stdout = oldStdout }()
+
+	// Run main
+	main()
+
+	// Restore stdout and get output
+	w.Close()
+	output := make([]byte, 1024)
+	n, _ := r.Read(output)
+
+	// Check if error message was printed
+	if !strings.Contains(string(output[:n]), "Error creating directory") {
+		t.Error("Expected directory creation error message")
+	}
+}
+
+// func TestMainWithReadDirError(t *testing.T) {
+// 	// Save original args and restore them after the test
+// 	oldArgs := os.Args
+// 	defer func() { os.Args = oldArgs }()
+
+// 	// Reset flags to avoid redefinition
+// 	flag.CommandLine = flag.NewFlagSet(os.Args[0], flag.ExitOnError)
+
+// 	// Create temporary directory
+// 	tempDir := t.TempDir()
+// 	originalAdrDir := adrDir
+// 	adrDir = tempDir
+// 	defer func() {
+// 		// Restore permissions before cleanup
+// 		_ = os.Chmod(tempDir, 0755)
+// 		adrDir = originalAdrDir
+// 	}()
+
+// 	// Create test ADR file with proper name format
+// 	adrFile := filepath.Join(tempDir, "adr-001-test-decision.md")
+// 	err := writeFile(adrFile, "# ADR 001: Test Decision\n\n**Status**: Proposed\n\nTest content")
+// 	if err != nil {
+// 		t.Fatalf("Failed to create test file: %v", err)
+// 	}
+
+// 	// Set up command line arguments for updating existing ADR
+// 	os.Args = []string{"cmd", "--number", "001", "--status", "Superseded"}
+
+// 	// Save original stdout
+// 	oldStdout := os.Stdout
+// 	r, w, _ := os.Pipe()
+// 	os.Stdout = w
+// 	defer func() { os.Stdout = oldStdout }()
+
+// 	// Make directory unreadable but executable (so we can still access files by name)
+// 	err = os.Chmod(tempDir, 0111)
+// 	if err != nil {
+// 		t.Fatalf("Failed to change directory permissions: %v", err)
+// 	}
+
+// 	// Run main
+// 	main()
+
+// 	// Restore stdout and get output
+// 	w.Close()
+// 	output := make([]byte, 1024)
+// 	n, _ := r.Read(output)
+
+// 	// Check if error message was printed
+// 	if !strings.Contains(string(output[:n]), "Error reading directory:") {
+// 		t.Errorf("Expected 'Error reading directory:' message, got: %s", string(output[:n]))
+// 	}
+// }
+
 func TestMainFunction(t *testing.T) {
 	// Save original args and restore them after the test
 	oldArgs := os.Args
@@ -310,5 +446,115 @@ func TestMainFunction(t *testing.T) {
 				}
 			}
 		})
+	}
+}
+
+func TestMainWithUpdateError(t *testing.T) {
+	// Save original args and restore them after the test
+	oldArgs := os.Args
+	defer func() { os.Args = oldArgs }()
+
+	// Reset flags to avoid redefinition
+	flag.CommandLine = flag.NewFlagSet(os.Args[0], flag.ExitOnError)
+
+	// Create temporary directory
+	tempDir := t.TempDir()
+	originalAdrDir := adrDir
+	adrDir = tempDir
+	defer func() { adrDir = originalAdrDir }()
+
+	// Create test ADR file and make it read-only
+	adrFile := filepath.Join(tempDir, "adr-001-test.md")
+	err := writeFile(adrFile, "test content")
+	if err != nil {
+		t.Fatalf("Failed to create test file: %v", err)
+	}
+	err = os.Chmod(adrFile, 0444)
+	if err != nil {
+		t.Fatalf("Failed to change file permissions: %v", err)
+	}
+	defer func() {
+		// Restore permissions before cleanup
+		_ = os.Chmod(adrFile, 0644)
+	}()
+
+	// Set up command line arguments for updating existing ADR
+	os.Args = []string{"cmd", "--number", "001", "--status", "Superseded"}
+
+	// Save original stdout
+	oldStdout := os.Stdout
+	r, w, _ := os.Pipe()
+	os.Stdout = w
+	defer func() { os.Stdout = oldStdout }()
+
+	// Run main
+	main()
+
+	// Restore stdout and get output
+	w.Close()
+	output := make([]byte, 1024)
+	n, _ := r.Read(output)
+
+	// Check if error message was printed
+	if !strings.Contains(string(output[:n]), "Error writing ADR") {
+		t.Error("Expected error when writing to read-only ADR file")
+	}
+}
+
+func TestMainWithIndexUpdateError(t *testing.T) {
+	// Save original args and restore them after the test
+	oldArgs := os.Args
+	defer func() { os.Args = oldArgs }()
+
+	// Reset flags to avoid redefinition
+	flag.CommandLine = flag.NewFlagSet(os.Args[0], flag.ExitOnError)
+
+	// Create temporary directory
+	tempDir := t.TempDir()
+	originalAdrDir := adrDir
+	adrDir = tempDir
+	defer func() { adrDir = originalAdrDir }()
+
+	// Create test ADR file
+	err := writeFile(filepath.Join(tempDir, "adr-001-test.md"), "test content")
+	if err != nil {
+		t.Fatalf("Failed to create test file: %v", err)
+	}
+
+	// Create index file and make it read-only
+	indexPath := filepath.Join(tempDir, indexFile)
+	err = writeFile(indexPath, "# Test Index")
+	if err != nil {
+		t.Fatalf("Failed to create index file: %v", err)
+	}
+	err = os.Chmod(indexPath, 0444)
+	if err != nil {
+		t.Fatalf("Failed to change file permissions: %v", err)
+	}
+	defer func() {
+		// Restore permissions before cleanup
+		_ = os.Chmod(indexPath, 0644)
+	}()
+
+	// Set up command line arguments for new ADR
+	os.Args = []string{"cmd", "--number", "002", "--status", "Accepted", "--title", "Test Decision"}
+
+	// Save original stdout
+	oldStdout := os.Stdout
+	r, w, _ := os.Pipe()
+	os.Stdout = w
+	defer func() { os.Stdout = oldStdout }()
+
+	// Run main
+	main()
+
+	// Restore stdout and get output
+	w.Close()
+	output := make([]byte, 1024)
+	n, _ := r.Read(output)
+
+	// Check if error message was printed
+	if !strings.Contains(string(output[:n]), "Error updating index") {
+		t.Error("Expected error when updating read-only index file")
 	}
 }
