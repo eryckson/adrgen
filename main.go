@@ -1,14 +1,15 @@
 package main
 
 import (
-	"flag"
 	"fmt"
 	"os"
 	"path/filepath"
 	"sort"
+	"strconv"
 	"strings"
 	"time"
 
+	"github.com/manifoldco/promptui"
 	"golang.org/x/text/cases"
 	"golang.org/x/text/language"
 )
@@ -84,23 +85,23 @@ func loadTemplateOrDefault() string {
 
 ---
 
-## 📌 Context
+## Context
 
 Describe here the problem, need, or motivation for this decision. Include the current scenario, technical or business constraints, and the factors influencing the choice.
 
-## ✅ Decision
+## Decision
 
 Clearly state the decision made. For example:
 
 > We decided to adopt the XYZ framework for developing REST APIs in the ABC project.
 
-## 🤔 Considered Alternatives
+## Considered Alternatives
 
 - **Alternative A** (chosen): reasons for the choice...
 - **Alternative B**: reasons for not choosing...
 - **Alternative C**: pros and cons...
 
-## 🎯 Consequences
+## Consequences
 
 Explain the impacts of this decision:
 
@@ -108,7 +109,7 @@ Explain the impacts of this decision:
 - Possible risks or side effects
 - Actions required to implement the decision
 
-## 🔁 Relations
+## Relations
 
 - Replaces ADR: 'adr-XXXX.md' _(if applicable)_
 - Replaced by ADR: 'adr-XXXX.md' _(if applicable)_
@@ -145,29 +146,185 @@ func adrExists(number string) bool {
 	return false
 }
 
+func getNextADRNumber() string {
+	files, err := os.ReadDir(adrDir)
+	if err != nil {
+		return "001" // Start with 001 if directory doesn't exist
+	}
+
+	maxNum := 0
+	for _, file := range files {
+		if file.IsDir() || !strings.HasSuffix(file.Name(), ".md") || file.Name() == indexFile || file.Name() == templateFile {
+			continue
+		}
+
+		// Extract number from filename (format: adr-XXX-*.md)
+		if strings.HasPrefix(file.Name(), "adr-") {
+			numStr := strings.Split(strings.TrimPrefix(file.Name(), "adr-"), "-")[0]
+			if num, err := strconv.Atoi(numStr); err == nil {
+				if num > maxNum {
+					maxNum = num
+				}
+			}
+		}
+	}
+
+	return fmt.Sprintf("%03d", maxNum+1)
+}
+
+func promptForNumber() (string, error) {
+	nextNum := getNextADRNumber()
+
+	validate := func(input string) error {
+		if len(input) == 0 {
+			return fmt.Errorf("number cannot be empty")
+		}
+		if len(input) != 3 {
+			return fmt.Errorf("number must be 3 digits (e.g., 001)")
+		}
+		if _, err := strconv.Atoi(input); err != nil {
+			return fmt.Errorf("number must be numeric")
+		}
+		return nil
+	}
+
+	prompt := promptui.Prompt{
+		Label:     "ADR Number",
+		Validate:  validate,
+		Default:   nextNum,
+		AllowEdit: true,
+	}
+
+	return prompt.Run()
+}
+
+func promptForStatus() (string, error) {
+	prompt := promptui.Select{
+		Label: "Select Status",
+		Items: []string{"Accepted", "Proposed", "Rejected", "Superseded", "Deprecated"},
+	}
+
+	_, result, err := prompt.Run()
+	return result, err
+}
+
+func promptForTitle() (string, error) {
+	validate := func(input string) error {
+		if len(input) == 0 {
+			return fmt.Errorf("title cannot be empty")
+		}
+		return nil
+	}
+
+	prompt := promptui.Prompt{
+		Label:    "ADR Title",
+		Validate: validate,
+	}
+
+	return prompt.Run()
+}
+
+func getCurrentStatus(content string) string {
+	lines := strings.Split(content, "\n")
+	for _, line := range lines {
+		if strings.HasPrefix(line, "**Status**: ") {
+			return strings.TrimSpace(strings.TrimPrefix(line, "**Status**: "))
+		}
+	}
+	return ""
+}
+
+func updateStatus(content, newStatus string) string {
+	currentStatus := getCurrentStatus(content)
+	if currentStatus == newStatus {
+		return content // Status hasn't changed, return content as is
+	}
+
+	lines := strings.Split(content, "\n")
+	newLines := make([]string, 0, len(lines))
+	statusFound := false
+	dateFound := false
+
+	for _, line := range lines {
+		if strings.HasPrefix(line, "**Status**: ") {
+			if !statusFound {
+				// Add new status line and previous status line only once
+				newLines = append(newLines, fmt.Sprintf("**Status**: %s", newStatus))
+				newLines = append(newLines, fmt.Sprintf("**Previous Status**: %s", currentStatus))
+				statusFound = true
+			}
+			continue
+		}
+
+		// Skip any existing Previous Status lines
+		if strings.HasPrefix(line, "**Previous Status**: ") {
+			continue
+		}
+
+		// Keep the date line in its original position
+		if strings.HasPrefix(line, "**Date**: ") {
+			if !dateFound {
+				newLines = append(newLines, line)
+				dateFound = true
+			}
+			continue
+		}
+
+		// Add all other lines
+		newLines = append(newLines, line)
+	}
+
+	// If we haven't found and added the status yet, add it after the title
+	if !statusFound {
+		result := make([]string, 0, len(newLines)+2)
+		titleFound := false
+		for _, line := range newLines {
+			result = append(result, line)
+			if strings.HasPrefix(line, "# ADR") {
+				titleFound = true
+				result = append(result, "")
+				result = append(result, fmt.Sprintf("**Status**: %s", newStatus))
+				result = append(result, fmt.Sprintf("**Previous Status**: %s", currentStatus))
+			}
+		}
+		if !titleFound {
+			// If no title was found, add status at the beginning
+			result = append([]string{
+				fmt.Sprintf("**Status**: %s", newStatus),
+				fmt.Sprintf("**Previous Status**: %s", currentStatus),
+				"",
+			}, result...)
+		}
+		newLines = result
+	}
+
+	return strings.Join(newLines, "\n")
+}
+
 func main() {
-	number := flag.String("number", "", "Sequential ADR number (e.g., 001)")
-	status := flag.String("status", "", "Decision status (e.g., Accepted, Proposed, Rejected)")
-	title := flag.String("title", "", "Descriptive ADR title in quotes")
-	flag.Parse()
-
-	if *number == "" || *status == "" {
-		fmt.Println("Required flags:")
-		fmt.Println("  --number: Sequential ADR number (e.g., 001)")
-		fmt.Println("  --status: Decision status (e.g., Accepted, Proposed, Rejected)")
-		fmt.Println("\nOptional flag:")
-		fmt.Println("  --title: Descriptive ADR title in quotes (required for new ADRs)")
-		flag.PrintDefaults()
+	number, err := promptForNumber()
+	if err != nil {
+		fmt.Printf("Prompt failed %v\n", err)
 		return
 	}
 
-	isNewAdr := !adrExists(*number)
-	if isNewAdr && *title == "" {
-		fmt.Println("Error: --title flag is required when creating a new ADR")
+	status, err := promptForStatus()
+	if err != nil {
+		fmt.Printf("Prompt failed %v\n", err)
 		return
 	}
 
-	err := ensureDir(adrDir)
+	var title string
+	isNewAdr := !adrExists(number)
+	if isNewAdr {
+		title, err = promptForTitle()
+		if err != nil {
+			fmt.Printf("Prompt failed %v\n", err)
+			return
+		}
+	}
+
+	err = ensureDir(adrDir)
 	if err != nil {
 		fmt.Println("Error creating directory:", err)
 		return
@@ -175,8 +332,8 @@ func main() {
 
 	var filename string
 	if isNewAdr {
-		kebabTitle := toKebabCase(*title)
-		filename = fmt.Sprintf("adr-%s-%s.md", *number, kebabTitle)
+		kebabTitle := toKebabCase(title)
+		filename = fmt.Sprintf("adr-%s-%s.md", number, kebabTitle)
 	} else {
 		// For updates, find the existing file
 		files, err := os.ReadDir(adrDir)
@@ -184,7 +341,7 @@ func main() {
 			fmt.Println("Error reading directory:", err)
 			return
 		}
-		prefix := fmt.Sprintf("adr-%s-", *number)
+		prefix := fmt.Sprintf("adr-%s-", number)
 		for _, file := range files {
 			if strings.HasPrefix(file.Name(), prefix) {
 				filename = file.Name()
@@ -199,7 +356,7 @@ func main() {
 	var content string
 	if isNewAdr {
 		template := loadTemplateOrDefault()
-		content = renderTemplate(template, *number, *status, *title, date)
+		content = renderTemplate(template, number, status, title, date)
 	} else {
 		// Read existing file
 		existingContent, err := os.ReadFile(fullPath)
@@ -207,7 +364,7 @@ func main() {
 			fmt.Println("Error reading existing ADR:", err)
 			return
 		}
-		content = strings.ReplaceAll(string(existingContent), "**Status**: ", fmt.Sprintf("**Status**: %s\n**Previous Status**: ", *status))
+		content = updateStatus(string(existingContent), status)
 	}
 
 	err = writeFile(fullPath, content)
